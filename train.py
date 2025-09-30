@@ -17,6 +17,7 @@ def train(args):
         num_nodes=args.num_nodes,
         strategy=args.strategy,
         accelerator=args.accelerator,
+        precision=args.precision,
         val_check_interval = args.val_check_interval,
         limit_val_batches = args.limit_val_batches,
         max_epochs = args.max_epochs,
