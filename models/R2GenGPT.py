@@ -393,3 +393,53 @@ class R2GenGPT(pl.LightningModule):
 
     def optimizer_zero_grad(self, epoch, batch_idx, optimizer):
         optimizer.zero_grad()
+        
+    @torch.no_grad()
+    def generate_report(self, image_tensor, input_text: str = ""):
+        """
+        Fungsi inference khusus untuk satu batch gambar.
+        - image_tensor: torch.Tensor [1,3,H,W] atau [C,H,W]
+        - input_text: teks prompt tambahan (default "")
+        """
+        device = next(self.parameters()).device
+
+        # pastikan [B,C,H,W]
+        if image_tensor.dim() == 3:
+            image_tensor = image_tensor.unsqueeze(0)
+        image_tensor = image_tensor.to(device)
+
+        # encode image sesuai encode_img (iterasi list)
+        img_embeds, atts_img = self.encode_img([image_tensor])
+        # layer_norm lalu cast ke dtype LLaMA
+        img_embeds = self.layer_norm(img_embeds).to(self.llama_model.dtype)
+
+        # bungkus prompt
+        wrap_result = self.prompt_wrap(img_embeds, atts_img)
+        if isinstance(wrap_result, tuple):
+            img_embeds, atts_img = wrap_result[:2]
+        else:
+            img_embeds, atts_img = wrap_result
+
+        batch_size = img_embeds.shape[0]
+        bos = torch.ones([batch_size, 1],
+                         dtype=atts_img.dtype,
+                         device=atts_img.device) * self.llama_tokenizer.bos_token_id
+        bos_embeds = self.embed_tokens(bos)
+        atts_bos = atts_img[:, :1]
+
+        inputs_embeds = torch.cat([bos_embeds, img_embeds], dim=1).to(self.llama_model.dtype)
+        attention_mask = torch.cat([atts_bos, atts_img], dim=1)
+
+        outputs = self.llama_model.generate(
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            num_beams=self.hparams.beam_size,
+            do_sample=self.hparams.do_sample,
+            min_new_tokens=self.hparams.min_new_tokens,
+            max_new_tokens=self.hparams.max_new_tokens,
+            repetition_penalty=self.hparams.repetition_penalty,
+            length_penalty=self.hparams.length_penalty,
+            temperature=self.hparams.temperature,
+        )
+        hypo = [self.decode(i) for i in outputs]
+        return hypo
